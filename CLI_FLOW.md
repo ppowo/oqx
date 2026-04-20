@@ -2,7 +2,7 @@
 
 ## Flow at a glance
 
-`oqx` is built around a text-first loop:
+`oqx` follows a **CLI-first, file-backed, text-first** loop:
 
 ```txt
 import contract -> inspect operations -> generate request -> edit in $EDITOR -> render -> send -> inspect history
@@ -12,15 +12,32 @@ By default, envelopes are **auto-generated from the normalized contract model** 
 
 ---
 
+## Current implementation direction
+
+This flow document stays product-first, but the first implementation is **Java-first**:
+
+- target the latest Java, currently **Temurin 26**
+- **picocli** for the CLI surface
+- a **custom normalized contract importer and contract model** at the core
+- **Apache CXF** at the integration edge for dynamic client / `Dispatch` / interceptors / WS-Security integration
+- **Woodstox** for XML-heavy import and parsing work
+- **JAXB RI** used selectively where binding helps
+- **TOML** for user-edited project/env/auth/request-sidecar config, **JSON** for internal cached/indexed state under `.oqx/`, and **XML** for user-owned request files
+- **NightConfig** (TOML module) for user-edited TOML read/write and comment-aware config handling
+- runnable **JAR first**; **`jpackage` later** if distribution needs it
+- do not use YAML, do not target Graal native image, and avoid JPMS/jlink-first design pressure early on
+
+---
+
 ## Core commands
 
 | Command | Purpose | Typical result |
 | --- | --- | --- |
-| `oqx init` | Create a new file-backed project | `oqx.yaml`, `requests/`, `env/`, `auth/`, `.oqx/` |
+| `oqx init` | Create a new file-backed project | `oqx.toml`, `requests/`, `env/`, `auth/`, `.oqx/` |
 | `oqx import` | Pin a WSDL, resolve imports, normalize it, compute fingerprints | new contract revision in `.oqx/contracts/...` |
-| `oqx ops` | List callable operations from the normalized index | operation names, bindings, ports, SOAP version, warnings |
+| `oqx ops` | List callable operations from the normalized contract model | operation names, bindings, ports, SOAP version, warnings |
 | `oqx example` | Print a starter envelope/template for an operation | XML to stdout |
-| `oqx new` | Create a persistent request file for an operation | `requests/<name>.xml` + sidecar metadata |
+| `oqx new` | Create a persistent request file for an operation | `requests/<name>.xml` + TOML sidecar metadata |
 | `oqx edit` | Open a request file in `$EDITOR` | user edits durable XML |
 | `oqx render` | Show the final message after env/auth/override injection without sending | rendered XML preview |
 | `oqx send` | Render, transmit, and snapshot the run | response + redacted history entry |
@@ -44,9 +61,9 @@ Create the local project skeleton.
 
 Typical behavior:
 
-- write `oqx.yaml`
+- write `oqx.toml`
 - create `requests/`, `env/`, `auth/`, `.oqx/`
-- optionally create starter `env/test.yaml` and `env/prod.yaml`
+- optionally create starter `env/test.toml` and `env/prod.toml`
 
 Example:
 
@@ -62,7 +79,7 @@ Typical behavior:
 
 - copy/pin the source WSDL
 - resolve imports/includes
-- normalize into an internal contract index
+- normalize into the custom contract model and persist a queryable index
 - compute full and semantic fingerprints
 - record import warnings
 
@@ -103,7 +120,7 @@ Typical behavior:
 
 - auto-generate a starter envelope/body
 - write `requests/<name>.xml`
-- write sidecar metadata with operation + contract fingerprint
+- write TOML sidecar metadata with operation + contract fingerprint
 
 ```bash
 oqx new getInfoMerce --name get-info-merce
@@ -147,6 +164,8 @@ Typical behavior:
 ```bash
 oqx send requests/get-info-merce.xml --env test
 ```
+
+The transport implementation can evolve behind the CLI, for example via JDK `HttpClient` or CXF `Dispatch`, but the request on disk remains user-owned XML.
 
 ### `oqx history`
 Show prior runs and allow inspection/replay.
@@ -192,8 +211,8 @@ oqx history
 
 ### What happens in that flow
 
-1. `oqx import` pins the WSDL and builds a normalized index.
-2. `oqx ops` lists the operations available from that index.
+1. `oqx import` pins the WSDL and builds the custom normalized contract model and queryable index.
+2. `oqx ops` lists the operations available from that normalized contract model.
 3. `oqx example` shows the generated starter envelope.
 4. `oqx new` creates a persistent request file on disk.
 5. `oqx edit` opens the file so the user can fill in business payload values.
@@ -214,8 +233,9 @@ The generated output is only a starting point.
 
 After generation, the XML belongs to the user. `oqx` should not keep trying to reformat or rewrite it silently.
 
-### Important exception: raw/manual mode
+The internal model that drives generation should stay product-owned rather than becoming a direct projection of CXF or JAXB runtime types.
 
+### Important exception: raw/manual mode
 Because WSDLs often drift or lie, `oqx` must also support fully manual sends.
 
 Example:
@@ -293,6 +313,8 @@ Auth should be attached as late as possible.
 
 Requests should not contain secrets by default.
 
+Later WS-Security helpers will likely sit behind WSS4J-oriented integration rather than inside the request-file model itself.
+
 ---
 
 ## Must-have v1 behavior
@@ -313,6 +335,7 @@ These are the minimum behaviors that make the CLI useful.
 | support raw/manual send mode | necessary because real SOAP/WSDL setups are often broken |
 | support endpoint/header/`SOAPAction` overrides | required for interoperability in the real world |
 | keep history redacted | avoids leaking secrets into local state |
+| use TOML for user-edited config, JSON for internal state under `.oqx/`, and XML for user-owned request files | keeps the file model readable without reintroducing YAML |
 
 ---
 

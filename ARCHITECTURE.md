@@ -2,7 +2,7 @@
 
 ## Mental model
 
-`oqx` is a **CLI-first SOAP workbench**.
+`oqx` is a **CLI-first, file-backed SOAP workbench**.
 
 It should feel closer to `git`, `kubectl`, or `terraform` than to a desktop GUI:
 
@@ -16,13 +16,32 @@ It should feel closer to `git`, `kubectl`, or `terraform` than to a desktop GUI:
 The default workflow is:
 
 1. import a WSDL once
-2. normalize and index it into an internal contract model
+2. normalize it into an internal contract model and index it for CLI use
 3. generate a starter request/envelope
 4. edit the request file manually
 5. render the final message with environment/auth/override data
 6. send it and store redacted history on disk
 
 The CLI is the product. Any future UI should be a thin layer over the same file-backed model.
+
+---
+
+## Current implementation direction
+
+The first implementation is **Java-first**.
+- target the latest Java, currently **Temurin 26**
+- use **picocli** for the CLI surface and subcommand UX
+- use **Apache CXF** at the integration edge for dynamic client / `Dispatch` / interceptors / WS-Security integration
+- keep the **normalized contract model** custom and product-owned; CXF must not become the canonical internal representation
+- prefer **Woodstox** for XML-heavy parsing and streaming work
+- use **JAXB RI selectively**, not as the default internal model for requests or contracts
+- use **TOML** for user-edited project/env/auth/request-sidecar config, **JSON** for internal cached/indexed state under `.oqx/`, and **XML** for user-owned request files
+- use **NightConfig** (TOML module) for user-edited TOML read/write and comment-aware config handling
+- do **not** use YAML for user-edited config
+- ship a runnable **JAR first**; consider **`jpackage` later** if distribution needs it; do **not** target Graal native image
+- avoid early **JPMS/jlink-first** design pressure because CXF integration is awkward there
+
+NightConfig should stay the TOML file layer for user-edited config, not become `oqx`'s domain model.
 
 ---
 
@@ -69,7 +88,8 @@ Examples:
 - bearer token
 - API key header
 - mTLS
-- later: WS-Security UsernameToken / signature profiles
+- later: WS-Security UsernameToken via WSS4J
+- later: XML signature/encryption support via Santuario-linked plumbing when needed
 
 Requests should point at profiles; they should not embed secrets by default.
 
@@ -84,7 +104,7 @@ They exist so users can:
 - hand-edit namespace-sensitive XML
 - keep durable working examples even when the WSDL later changes
 
-Request metadata should live outside the XML when possible, for example in a sidecar file.
+Request metadata should live outside the XML when possible, for example in a TOML sidecar file.
 
 ### History / snapshots
 History is append-only and immutable.
@@ -108,16 +128,16 @@ A project should be file-first and easy to inspect without the CLI.
 
 ```txt
 .
-├── oqx.yaml
+├── oqx.toml
 ├── requests/
 │   ├── getInfoMerce.xml
-│   └── getInfoMerce.oqx.yaml
+│   └── getInfoMerce.oqx.toml
 ├── env/
-│   ├── test.yaml
-│   └── prod.yaml
+│   ├── test.toml
+│   └── prod.toml
 ├── auth/
-│   ├── basic-test.yaml
-│   └── mtls-prod.yaml
+│   ├── basic-test.toml
+│   └── mtls-prod.toml
 └── .oqx/
     ├── contracts/
     │   └── gpfwebservice/
@@ -133,23 +153,24 @@ A project should be file-first and easy to inspect without the CLI.
     ├── cache/
     │   └── imports/
     └── history/
-    │       └── 2026-04-20/
-    │           └── 2026-04-20T12-31-22Z_getInfoMerce/
-    │               ├── meta.yaml
-    │               ├── request.rendered.xml
-    │               ├── request.redacted.xml
-    │               ├── response.raw.xml
-    │               └── response.redacted.xml
+        └── 2026-04-20/
+            └── 2026-04-20T12-31-22Z_getInfoMerce/
+                ├── meta.json
+                ├── request.rendered.xml
+                ├── request.redacted.xml
+                ├── response.raw.xml
+                └── response.redacted.xml
 ```
 
 ### Notes
 
-- `oqx.yaml` stores project-level defaults and the active contract.
+- `oqx.toml` stores project-level defaults and the active contract.
 - `requests/*.xml` are user-owned working files.
-- `requests/*.oqx.yaml` can store metadata like operation, contract name, contract fingerprint, defaults, and last-known status.
-- `env/*.yaml` contains deploy-target concerns.
-- `auth/*.yaml` contains auth mechanism definitions and secret references.
-- `.oqx/` is internal tool state: imported contract revisions, caches, and history.
+- `requests/*.oqx.toml` can store metadata like operation, contract name, contract fingerprint, defaults, and last-known status.
+- `env/*.toml` contains deploy-target concerns.
+- `auth/*.toml` contains auth mechanism definitions and secret references.
+- `.oqx/` is internal tool state: imported contract revisions, caches, indexes, and history.
+- Internal `.oqx/` state should prefer JSON when the data is cached, indexed, or machine-maintained.
 
 ---
 
@@ -157,18 +178,22 @@ A project should be file-first and easy to inspect without the CLI.
 
 `oqx import` should treat the WSDL as input to a one-time normalization pipeline.
 
+The importer should be custom and product-owned. A SOAP library can help at the edges, but `oqx` should not make CXF-generated code, JAXB-bound graphs, or a library-specific WSDL model the product's source of truth.
+
 ### Import pipeline
 
 1. Read the provided WSDL, even if the file extension is just `.xml`.
 2. Resolve WSDL/XSD imports and includes.
 3. Cache imported artifacts locally for repeatable use.
-4. Build a canonical internal model.
-5. Persist the normalized model and fingerprints.
+4. Build the normalized contract model.
+5. Persist the normalized contract model, queryable index, and fingerprints.
 6. Emit import warnings for ambiguous or suspicious WSDL constructs.
+
+Woodstox-backed StAX parsing is a strong fit here because WSDL/XSD-heavy import work needs careful XML control and good streaming behavior.
 
 ### Normalized contract model
 
-The normalized model should answer CLI questions without reparsing the raw WSDL every time.
+The normalized contract model should answer CLI questions without reparsing the raw WSDL every time.
 
 It should contain at least:
 
@@ -183,7 +208,7 @@ It should contain at least:
 - resolved schema references needed for example generation
 - warnings about unsupported or lossy cases
 
-The CLI should operate from this normalized model for:
+The CLI should operate from the normalized contract model for:
 
 - `oqx ops`
 - `oqx example`
@@ -191,7 +216,11 @@ The CLI should operate from this normalized model for:
 - staleness checks
 - contract diffs
 
-The raw WSDL remains pinned for traceability, but the internal index is the runtime source of truth.
+The raw WSDL remains pinned for traceability, but the normalized contract model and persisted index are the runtime source of truth.
+
+CXF can still be valuable later for dynamic invocation, interceptors, logging, and WS-Security integration. It should remain a tool at the integration edge, not the canonical contract model.
+
+Selective JAXB use is fine for bounded binding tasks, but request generation, indexing, diffing, and raw XML workflows should not depend on JAXB as the primary representation.
 
 ---
 
@@ -239,7 +268,7 @@ That update flow should:
 
 ### Request staleness
 
-A request sidecar should record:
+A request sidecar TOML file should record:
 
 - logical contract name
 - contract fingerprint
@@ -306,7 +335,7 @@ Applied at the HTTP/TLS layer:
 Applied inside the SOAP message during `render`/`send`:
 
 - WS-Security UsernameToken
-- later: signatures, timestamps, and other WS-Security policies
+- later: signatures, encryption, timestamps, and other WS-Security policies
 
 ### Secret sources
 Secrets should be referenced, not hardcoded.
@@ -320,10 +349,10 @@ Supported reference styles should include:
 
 Example:
 
-```yaml
-kind: basic
-username: env:OQX_USER
-password: keychain:porto/gpf/password
+```toml
+kind = "basic"
+username = "env:OQX_USER"
+password = "keychain:porto/gpf/password"
 ```
 
 ### Application timing
@@ -335,6 +364,21 @@ That means:
 - transport headers are assembled from env + auth profile
 - WS-Security headers are injected into the final rendered envelope
 - secrets stay out of committed working XML unless the user intentionally writes them there
+
+WSS4J is the likely later integration point for WS-Security helpers. Santuario may appear indirectly when XML signature or encryption becomes necessary.
+
+---
+
+## Packaging direction
+
+The packaging path should stay boring early on.
+
+- prefer a runnable JAR first
+- consider `jpackage` later if distribution needs it
+- do not target Graal native image
+- avoid JPMS/jlink-first design pressure early on, especially if it makes CXF integration harder
+
+This project is a SOAP workbench first; packaging should support that goal rather than constrain the architecture too early.
 
 ---
 
