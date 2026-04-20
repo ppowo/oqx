@@ -33,10 +33,22 @@ The first implementation is **Java-first**.
 - [`DOCS_STYLE.md`](./DOCS_STYLE.md) — preferred wording, implementation terminology, and documentation conventions for future repo docs
 
 ## Project status
-This repository now includes a minimal Java/Maven scaffold plus a JDK-only local installer prototype:
-
+This repository now includes a minimal Java/Maven scaffold plus dependency-free local install and uninstall scripts:
 - `src/main/java/oqx/Main.java` — hello-world entrypoint
 - `scripts/InstallLocal.java` — dependency-free local installer runnable as `java scripts/InstallLocal.java`
-- Maven task-runner shortcut: `mvn exec:exec@install-local`
+- `scripts/UninstallLocal.java` — dependency-free local uninstaller runnable as `java scripts/UninstallLocal.java`
 
+### Local install / uninstall
+
+- Install via Maven: `mvn exec:exec@install-local`
+- Uninstall via Maven: `mvn exec:exec@uninstall-local`
+- Install via Java: `java scripts/InstallLocal.java`
+- Uninstall via Java: `java scripts/UninstallLocal.java`
+
+Both scripts also support `--install-dir <path>`.
+
+Examples:
+
+- `mvn exec:exec@install-local -Doqx.installLocal.args="--install-dir <path>"`
+- `mvn exec:exec@uninstall-local -Doqx.uninstallLocal.args="--install-dir <path>"`
 The broader product is still in the architecture-first stage; the CLI implementation itself is only a small bootstrap prototype so far.
