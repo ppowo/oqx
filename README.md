@@ -33,5 +33,10 @@ The first implementation is **Java-first**.
 - [`DOCS_STYLE.md`](./DOCS_STYLE.md) — preferred wording, implementation terminology, and documentation conventions for future repo docs
 
 ## Project status
+This repository now includes a minimal Java/Maven scaffold plus a JDK-only local installer prototype:
 
-This repository is still docs-only. It captures the architecture, command flow, and product scope for the first implementation of the Java-first, file-backed SOAP workbench.
+- `src/main/java/oqx/Main.java` — hello-world entrypoint
+- `scripts/InstallLocal.java` — dependency-free local installer runnable as `java scripts/InstallLocal.java`
+- Maven task-runner shortcut: `mvn exec:exec@install-local`
+
+The broader product is still in the architecture-first stage; the CLI implementation itself is only a small bootstrap prototype so far.
